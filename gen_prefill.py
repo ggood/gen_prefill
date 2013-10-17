@@ -95,6 +95,7 @@ def pick_most_common(call, key, entries):
     ret = max(values_set, key=values.count)
     if len(values_set) > 1:
         sys.stderr.write("Ambiguous %s for %s: choosing %s from %s\n" % (key, call, ret, values))
+    return ret
 
 
 def merge_entries(call, entries):
