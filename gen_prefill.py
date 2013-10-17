@@ -21,6 +21,7 @@ def load_pre(fn):
       State
       CK
       Birthdate
+      Precedence
     """
     sys.stderr.write("Seeding from file %s\n" % fn)
     total_lines = valid_lines = 0
