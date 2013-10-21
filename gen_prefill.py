@@ -177,6 +177,25 @@ def write_writelog():
         time_on += 2
 
 
+def enumerate_files(dir):
+    """
+    Recursively find all files within <topdir>, descending into
+    any subdirectories.
+    """
+    files = []
+    sys.stderr.write("PROCESS %s\n" % dir)
+    for entry in os.listdir(dir):
+        target = os.path.join(dir, entry)
+        if os.path.isdir(target):
+            sys.stderr.write("d %s\n" % target)
+            files += enumerate_files(target)
+        elif os.path.isfile(target):
+            sys.stderr.write("f %s\n" % target)
+            files.append(target)
+        else:
+            sys.stderr.write("? %s\n" % target)
+    return files
+
 
 def usage():
     sys.stderr.write(
@@ -203,9 +222,9 @@ if __name__ == "__main__":
     if pre_ex_file:
         load_pre(pre_ex_file)
     if cabrillo_dir:
-        files = os.listdir(cabrillo_dir)
+        files = enumerate_files(cabrillo_dir)
         for file in files:
-            load_cabrillo(os.path.join(cabrillo_dir, file))
+            load_cabrillo(file)
 
     write_n1mm()
     #write_wintest()
