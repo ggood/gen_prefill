@@ -3,10 +3,13 @@
 import getopt
 import os
 import sys
+import time
 
 
 callmap = {}
-
+tot_qsos = 0
+tot_logs = 0
+start_time = time.time()
 
 def load_pre(fn):
     """
@@ -65,7 +68,7 @@ def load_cabrillo(fn):
             buf = buf.strip()
             if buf.startswith("QSO:"):
                 try:
-                    (_, freq, mode, ymd, time, mycall, mynr, myprec, mycheck, mysec, call, nr, prec, check, sec) = buf.split()
+                    (_, freq, mode, ymd, time, mycall, mynr, myprec, mycheck, mysec, call, nr, prec, check, sec) = buf.split()[0:15]
                     log_lines += 1
                     call = call.upper()
                     if call not in callmap:
@@ -86,15 +89,20 @@ def load_cabrillo(fn):
                     pass
             buf = fp.readline()
     sys.stderr.write("Read %d lines (%d QSOs)\n" % (total_lines, log_lines))
+    global tot_qsos
+    tot_qsos += log_lines
+    global tot_logs
+    if log_lines > 0:
+        tot_logs += 1
                
 
 
-def pick_most_common(call, key, entries):
+def pick_most_common(call, key, entries, latest_year):
     values = [entry[key] for entry in entries]
     values_set = set(values)
     ret = max(values_set, key=values.count)
     if len(values_set) > 1:
-        sys.stderr.write("Ambiguous %s for %s: choosing %s from %s\n" % (key, call, ret, values))
+        sys.stderr.write("Ambiguous %s for %s: choosing %s from year %s, values %s\n" % (key, call, ret, latest_year, values))
     return ret
 
 
@@ -118,37 +126,59 @@ def merge_entries(call, entries):
         # might as well pick one
         return latest_entries[0]
     ret_entry = dict(latest_entries[0])  # Make a copy
-    ret_entry["sec"] = pick_most_common(call, "sec", latest_entries)
-    ret_entry["check"] = pick_most_common(call, "check", latest_entries)
-    ret_entry["prec"] = pick_most_common(call, "prec", latest_entries)
+    ret_entry["sec"] = pick_most_common(call, "sec", latest_entries, latest_year)
+    ret_entry["check"] = pick_most_common(call, "check", latest_entries, latest_year)
+    ret_entry["prec"] = pick_most_common(call, "prec", latest_entries, latest_year)
     return ret_entry
 
 
-def write_n1mm():
-    sys.stderr.write("Generating N1MM prefill file with %d callsigns\n" % len(callmap))
-    for call in sorted(callmap.keys()):
-        e = merge_entries(call, callmap[call])
-        line = "%s,%s,%s,%s,%s,%s,%s,%s,%s" % (call, e["name"], e["grid1"], e["grid2"],
-                                               e["sec"], e["state"], e["check"], e["birthdate"],
-                                               e["prec"])
-        sys.stdout.write(line)
-        sys.stdout.write("\r\n")
+def write_trlog(filename):
+    # Format: AA0BA =ANE =K63 =VA
+    with open(filename, "w") as fp:
+        sys.stderr.write("Generating TR-LOG prefill file with %d callsigns\n" % len(callmap))
+        for call in sorted(callmap.keys()):
+            e = merge_entries(call, callmap[call])
+            line = "%s%s%s%s%s" % (call,
+                                      " =N%s" % e["name"] if e["name"] else "",
+                                      " =A%s" %e["sec"] if e["sec"] else "",
+                                      " =K%s" % e["check"] if e["check"] else "",
+                                      " =V%s" % e["prec"] if e["prec"] else "")
+            fp.write(line)
+            fp.write("\r\n")
 
 
-def write_wintest():
+def write_n1mm(filename):
+    with open(filename, "w") as fp:
+        sys.stderr.write("Generating N1MM prefill file with %d callsigns\n" % len(callmap))
+        for call in sorted(callmap.keys()):
+            e = merge_entries(call, callmap[call])
+            line = "%s,%s,%s,%s,%s,%s,%s,%s,%s" % (call, e["name"], e["grid1"], e["grid2"],
+                                                   e["sec"], e["state"], e["check"], e["birthdate"],
+                                                   e["prec"])
+            fp.write(line)
+            fp.write("\r\n")
+
+
+def write_wintest(filename):
     """
     format:
     4U1WB    U 4U1WB    89 MDC 
     """
-    sys.stderr.write("Generating WinTest prefill file with %d callsigns\n" % len(callmap))
-    for call in sorted(callmap.keys()):
-        e = merge_entries(call, callmap[call])
-        line = "%-9s%-2s%-9s%-3s%-4s" % (call, e["prec"] or "-", call, e["check"] or "--", e["sec"])
-        sys.stdout.write(line)
-        sys.stdout.write("\r\n")
+    with open(filename, "w") as fp:
+        sys.stderr.write("Generating WinTest prefill file with %d callsigns\n" % len(callmap))
+        for call in sorted(callmap.keys()):
+            e = merge_entries(call, callmap[call])
+            line = "%-8s %-2s%-8s %-3s%-4s%s" % (call,
+                                               e["prec"] or "-",
+                                               call,
+                                               e["check"] or "--",
+                                               e["sec"] or "---",
+                                               "(%s)" % e["name"] if e["name"] else "")
+            fp.write(line)
+            fp.write("\r\n")
 
 
-def write_writelog():
+def write_writelog(filename):
     """
     format:
     <QSO_DATE:8>20021116 <TIME_ON:6>000008 <FREQ:6>28.375 <BAND:3>10m <STX:1>1 <MODE:3>SSB <M:1>1 <ML:1>2
@@ -159,22 +189,27 @@ def write_writelog():
      <ARRL_SECT:2>MO
     <EOR>
     """
-    sys.stderr.write("Generating WriteLog prefill file with %d callsigns\n" % len(callmap))
-    i = 1
-    time_on = 0
-    for call in sorted(callmap.keys()):
-        e = merge_entries(call, callmap[call])
-        stanza = """<QSO_DATE:8>20021116 <TIME_ON:6>%06d <FREQ:6>28.375 <BAND:3>10m <STX:1>1 <MODE:3>SSB <M:1>1 <ML:1>2
- <SRX:%d>%d
- <P:%d>%s>
- <CALL:%d>%s
- <CK:%d>%s
- <ARRL_SECT:%d>%s
-<EOR>""" % (time_on, len(str(i)), i, len(e["prec"]), e["prec"], len(call), call, len(e["check"]), e["check"], len(e["sec"]), e["sec"])
-        sys.stdout.write(stanza)
-        sys.stdout.write("\r\n")
-        i += 1
-        time_on += 2
+    with open(filename, "w") as fp:
+        sys.stderr.write("Generating WriteLog prefill file with %d callsigns\n" % len(callmap))
+        i = 1
+        time_on = 0
+        fp.write("Writelog\r\n")
+        fp.write("<EOH>\r\n")
+        for call in sorted(callmap.keys()):
+            e = merge_entries(call, callmap[call])
+            stanza = [
+                "<QSO_DATE:8>20021116 <TIME_ON:6>%06d <FREQ:6>28.375 <BAND:3>10m <STX:1>1 <MODE:3>SSB <M:1>1 <ML:1>2" % time_on,
+                " <SRX:%d>%d"  % (len(str(i)), i),
+                " <P:%d>%s" % (len(e["prec"]), e["prec"]),
+                " <CALL:%d>%s" % (len(call), call),
+                " <CK:%d>%s" % (len(e["check"]), e["check"]),
+                " <ARRL_SECT:%d>%s" % (len(e["sec"]), e["sec"]),
+                "<EOR>"
+            ]
+            fp.write("\r\n".join(stanza))
+            fp.write("\r\n")
+            i += 1
+            time_on += 2
 
 
 def enumerate_files(dir):
@@ -226,6 +261,14 @@ if __name__ == "__main__":
         for file in files:
             load_cabrillo(file)
 
-    write_n1mm()
-    #write_wintest()
-    #write_writelog()
+    write_n1mm("SS_2013_N1MM_prefill.txt")
+    write_wintest("SS_2013_wintest_prefill.xdt")
+    write_writelog("SS_2013_writelog_prefill.adi")
+    write_trlog("SS_2013_trlog_prefill.asc")
+
+    # For debugging is something's fishy with the calculations
+    #import pprint
+    #pprint.pprint(callmap)
+
+
+    sys.stderr.write("Processed %d QSOs, %d unique callsigns, from %d logs, in %f seconds\n" % (tot_qsos, len(callmap), tot_logs, time.time() - start_time))
