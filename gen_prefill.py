@@ -163,12 +163,17 @@ def write_wintest(filename):
     """
     format:
     4U1WB    U 4U1WB    89 MDC 
+    Update: N6TV suggested (1) adding a title line, and (2) using more generous padding, e.g.
+    # TITLE 2013 NCCC data
+    AA0A        U AA0A       60  MO 
     """
     with open(filename, "w") as fp:
         sys.stderr.write("Generating WinTest prefill file with %d callsigns\n" % len(callmap))
+        year = time.strftime("%Y", time.gmtime())
+        fp.write("# TITLE %s NCCC data\r\n" % year)
         for call in sorted(callmap.keys()):
             e = merge_entries(call, callmap[call])
-            line = "%-8s %-2s%-8s %-3s%-4s%s" % (call,
+            line = "%-11s %-2s%-10s %-4s%-4s%s" % (call,
                                                e["prec"] or "-",
                                                call,
                                                e["check"] or "--",
