@@ -148,6 +148,9 @@ def write_trlog(filename):
 
 
 def write_n1mm(filename):
+    # TODO(ggood) - N1MM allows a subset of fields to be provided, and the order of those
+    # fields can be given with something like:
+    # !!Order!!, Call, Name, State
     with open(filename, "w") as fp:
         sys.stderr.write("Generating N1MM prefill file with %d callsigns\n" % len(callmap))
         for call in sorted(callmap.keys()):
