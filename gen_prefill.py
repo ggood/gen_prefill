@@ -11,6 +11,7 @@ tot_qsos = 0
 tot_logs = 0
 start_time = time.time()
 
+
 def load_pre(filename):
     """
     Load data from an N1MM-style prefill file.
