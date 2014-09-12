@@ -11,6 +11,9 @@ tot_qsos = 0
 tot_logs = 0
 start_time = time.time()
 
+def test_git_hub_changes():
+    #trying to learn how to auto-commit or push
+    pass
 
 def load_pre(filename):
     """
