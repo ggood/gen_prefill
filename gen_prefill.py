@@ -11,47 +11,59 @@ tot_qsos = 0
 tot_logs = 0
 start_time = time.time()
 
-def load_pre(fn):
+
+def load_pre(filename):
     """
-    Load a file of pre-existing calls. This is typically a prefill file
-    from a previous year. N1MM format only, which is a comma-separated
-    file with fields:
-      Call
-      Name
-      Grid1
-      Grid2
-      Section
-      State
-      CK
-      Birthdate
-      Precedence
+    Load data from an N1MM-style prefill file.
+    This version of load_pre() reads the N1MM !!Order!! directive if available.
+
+    Default N1MM format is:
+    Call, Name, Loc1, Loc2, Sect, State, CK, BirthDate, Exch1, Misc, UserText
+    Exch1 is used for Prec in Sweepstakes.
+    N1MM does not care about capitalization.  Call, call, CALL are all the same for N1MM.
+
+    The following directive, as an example, might be found at the top of the file:
+    !!Order!!, Call, Exch1, Ck, Sect, State
+
+    A corresponding example line of the file would be:
+    WZ6Z,A,64,EB,CA
     """
-    sys.stderr.write("Seeding from file %s\n" % fn)
-    total_lines = valid_lines = 0
-    with open(fn, "r") as fp:
-        buf = fp.readline()
-        while buf != "":
-            total_lines += 1
-            buf = buf.strip()
+    print("Reading prefill file {:s}".format(filename))
+    total_lines, valid_lines = 0, 0
+
+    # N1MM default
+    fields = ['CALL', 'NAME', 'LOC1', 'LOC2', 'SECT', 'STATE', 'CK', 'BIRTHDATE', 'EXCH1', 'MISC', 'USERTEXT']
+    # field needed for Sweepstakes prefill
+    sweeps_fields = ['CALL', 'SECT', 'CK', 'EXCH1']
+    missing_field = False
+
+    for line in open(filename, "r"):
+
+        total_lines += 1
+
+        if line.startswith('!!Order!!' or '!!ORDER!!' or '!!order!!'):
+            fields = [item.strip().upper() for item in line.split(',')]
+            fields.remove('!!ORDER!!')
+
+            # check if all sweepstakes fields are present
+            for item in sweeps_fields:
+                if item not in fields:
+                    print('The {:s} field is missing!'.format(item))
+                    missing_field = True
+
+        if not (line.startswith('#') or line.startswith('!!') or missing_field):
             try:
-                # WZ6Z,HOWARD,,,EB,CA,64,-1,A
-                (call, name, grid1, grid2, sec, state, check, birthdate, prec) = buf.split(",")
-                callmap[call.upper()] = [{
-                    "name": name,
-                    "grid1": grid1,
-                    "grid2": grid2,
-                    "sec": sec,
-                    "state": state,
-                    "check": check,
-                    "birthdate": birthdate,
-                    "prec": prec,
-                    "year": -1,  # Used when breaking ties
-                }]
+                data = [item.strip().upper() for item in line.split(',')]
+                d = dict(zip(fields, data))
+                d['YEAR'] = -1
+                call = d['CALL']
+                del d['CALL']
+                callmap[call.upper()] = [d]
                 valid_lines += 1
             except ValueError:
-                sys.stderr.write("Ignoring pre-existing call line \"%s\"" % buf)
-            buf = fp.readline()
-    sys.stderr.write("Read %d lines (%d valid)\n" % (total_lines, valid_lines))
+                print('Ignoring prefill call line: {:s}'.format(line))
+
+    print('Read {:d} lines ({:d} valid) from prefill file.'.format(total_lines, valid_lines))
 
 
 def load_cabrillo(fn):
@@ -59,8 +71,8 @@ def load_cabrillo(fn):
     Format:
     QSO: 21039 CW 2012-11-03 2100 KM6I       0001 U 75 SCV N3EN       0001 A 56 MDC
     """
-    sys.stderr.write("Processing %s\n" % fn)
-    total_lines = log_lines = 0
+    print('Processing {:s}'.format(fn))
+    total_lines, log_lines = 0, 0
     with open(fn, "r") as fp:
         buf = fp.readline()
         while buf != "":
@@ -68,23 +80,19 @@ def load_cabrillo(fn):
             buf = buf.strip()
             if buf.startswith("QSO:"):
                 try:
-                    (_, freq, mode, ymd, time, mycall, mynr, myprec, mycheck, mysec, call, nr, prec, check, sec) = buf.split()[0:15]
+                    (_, freq, mode, ymd, time, mycall, mynr, myprec, mycheck, mysec, call, nr, prec, check,
+                     sec) = buf.split()[0:15]
                     log_lines += 1
                     call = call.upper()
                     if call not in callmap:
                         callmap[call] = []
                     callmap[call].append({
-                        "name": "",
-                        "grid1": "",
-                        "grid2": "",
-                        "sec": sec,
-                        "state": "",
-                        "check": check,
-                        "birthdate": "-1",
-                        "prec": prec,
-                        "year": int(ymd[0:4]),
+                        "SECT": sec,
+                        "CK": check,
+                        "EXCH1": prec,
+                        "YEAR": int(ymd[0:4]),
                     })
-                    
+
                 except ValueError:
                     pass
             buf = fp.readline()
@@ -94,7 +102,6 @@ def load_cabrillo(fn):
     global tot_logs
     if log_lines > 0:
         tot_logs += 1
-               
 
 
 def pick_most_common(call, key, entries, latest_year):
@@ -102,33 +109,34 @@ def pick_most_common(call, key, entries, latest_year):
     values_set = set(values)
     ret = max(values_set, key=values.count)
     if len(values_set) > 1:
-        sys.stderr.write("Ambiguous %s for %s: choosing %s from year %s, values %s\n" % (key, call, ret, latest_year, values))
+        sys.stderr.write(
+            "Ambiguous %s for %s: choosing %s from year %s, values %s\n" % (key, call, ret, latest_year, values))
     return ret
 
 
-def merge_entries(call, entries):
+def merge_entries_new(call, entries):
     """
     When this callsign appears in more than one log, there may be discrepancies,
     due to (a) the exchange changed from one year to another, or (b) the
     copying station busted one or more items. We pick the "best" value for
-    each field accoding to the following algorithm:
-    - we alwways prefer data from a more recent year, so discard all but the
+    each field according to the following algorithm:
+    - we always prefer data from a more recent year, so discard all but the
       latest year
     - if the callsign appears in more than one log for the latest year,
       compute the most-often copied value for each item in the exchange
     """
     # Figure out which years this call was copied
-    latest_year = sorted([entry["year"] for entry in entries])[-1]
+    latest_year = sorted([entry["YEAR"] for entry in entries])[-1]
     # And only use those entries
-    latest_entries = [entry for entry in entries if entry["year"] == latest_year]
+    latest_entries = [entry for entry in entries if entry["YEAR"] == latest_year]
     if len(latest_entries) < 3:
         # If we have one entry, return it. If we have two entries, we
         # might as well pick one
         return latest_entries[0]
     ret_entry = dict(latest_entries[0])  # Make a copy
-    ret_entry["sec"] = pick_most_common(call, "sec", latest_entries, latest_year)
-    ret_entry["check"] = pick_most_common(call, "check", latest_entries, latest_year)
-    ret_entry["prec"] = pick_most_common(call, "prec", latest_entries, latest_year)
+    ret_entry["SECT"] = pick_most_common(call, "SECT", latest_entries, latest_year)
+    ret_entry["CK"] = pick_most_common(call, "CK", latest_entries, latest_year)
+    ret_entry["EXCH1"] = pick_most_common(call, "EXCH1", latest_entries, latest_year)
     return ret_entry
 
 
@@ -137,29 +145,31 @@ def write_trlog(filename):
     with open(filename, "w") as fp:
         sys.stderr.write("Generating TR-LOG prefill file with %d callsigns\n" % len(callmap))
         for call in sorted(callmap.keys()):
-            e = merge_entries(call, callmap[call])
-            line = "%s%s%s%s%s" % (call,
-                                      " =N%s" % e["name"] if e["name"] else "",
-                                      " =A%s" %e["sec"] if e["sec"] else "",
-                                      " =K%s" % e["check"] if e["check"] else "",
-                                      " =V%s" % e["prec"] if e["prec"] else "")
+            e = merge_entries_new(call, callmap[call])
+            line = "%s%s%s%s" % (call,
+                                 " =A%s" % e["SECT"] if e["SECT"] else "",
+                                 " =K%s" % e["CK"] if e["CK"] else "",
+                                 " =V%s" % e["EXCH1"] if e["EXCH1"] else "")
             fp.write(line)
             fp.write("\r\n")
 
 
 def write_n1mm(filename):
-    # TODO(ggood) - N1MM allows a subset of fields to be provided, and the order of those
-    # fields can be given with something like:
-    # !!Order!!, Call, Name, State
+    """
+    This version of write_n1mm() takes advantage of N1MM's !!Order!! and !!MapStateToSect!! directives.
+    See: http://n1mm.hamdocs.com/tiki-index.php?page=Call+History+and+Reverse+Call+History+Lookup
+    """
     with open(filename, "w") as fp:
         sys.stderr.write("Generating N1MM prefill file with %d callsigns\n" % len(callmap))
+
+        fp.write('# NCCC N1MM Logger Sweepstakes Call History File\n')
+        fp.write('!!Order!!, CALL, EXCH1, CK, SECT\n')
+
         for call in sorted(callmap.keys()):
-            e = merge_entries(call, callmap[call])
-            line = "%s,%s,%s,%s,%s,%s,%s,%s,%s" % (call, e["name"], e["grid1"], e["grid2"],
-                                                   e["sec"], e["state"], e["check"], e["birthdate"],
-                                                   e["prec"])
+            e = merge_entries_new(call, callmap[call])
+            line = "%s,%s,%s,%s" % (call, e["EXCH1"], e["CK"], e["SECT"])
             fp.write(line)
-            fp.write("\r\n")
+            fp.write("\n")
 
 
 def write_wintest(filename):
@@ -175,13 +185,12 @@ def write_wintest(filename):
         year = time.strftime("%Y", time.gmtime())
         fp.write("# TITLE %s NCCC data\r\n" % year)
         for call in sorted(callmap.keys()):
-            e = merge_entries(call, callmap[call])
-            line = "%-11s %-2s%-10s %-4s%-4s%s" % (call,
-                                               e["prec"] or "-",
-                                               call,
-                                               e["check"] or "--",
-                                               e["sec"] or "---",
-                                               "(%s)" % e["name"] if e["name"] else "")
+            e = merge_entries_new(call, callmap[call])
+            line = "%-11s %-2s%-10s %-4s%-4s" % (call,
+                                                 e["EXCH1"] or "-",
+                                                 call,
+                                                 e["CK"] or "--",
+                                                 e["SECT"] or "---")
             fp.write(line)
             fp.write("\r\n")
 
@@ -189,35 +198,29 @@ def write_wintest(filename):
 def write_writelog(filename):
     """
     format:
-    <QSO_DATE:8>20021116 <TIME_ON:6>000008 <FREQ:6>28.375 <BAND:3>10m <STX:1>1 <MODE:3>SSB <M:1>1 <ML:1>2
-     <SRX:1>5
-     <P:0>
-     <CALL:4>AA0B
-     <CK:0>
-     <ARRL_SECT:2>MO
+    <CALL:4>AA0B
+    <P:0>
+    <CK:0>
+    <ARRL_SECT:2>MO
     <EOR>
     """
     with open(filename, "w") as fp:
         sys.stderr.write("Generating WriteLog prefill file with %d callsigns\n" % len(callmap))
-        i = 1
-        time_on = 0
-        fp.write("Writelog\r\n")
-        fp.write("<EOH>\r\n")
+
+        fp.write("NCCC Writelog Sweepstakes Call History File\n")
+        fp.write("<EOH>\n")
+
         for call in sorted(callmap.keys()):
-            e = merge_entries(call, callmap[call])
-            stanza = [
-                "<QSO_DATE:8>20021116 <TIME_ON:6>%06d <FREQ:6>28.375 <BAND:3>10m <STX:1>1 <MODE:3>SSB <M:1>1 <ML:1>2" % time_on,
-                " <SRX:%d>%d"  % (len(str(i)), i),
-                " <P:%d>%s" % (len(e["prec"]), e["prec"]),
-                " <CALL:%d>%s" % (len(call), call),
-                " <CK:%d>%s" % (len(e["check"]), e["check"]),
-                " <ARRL_SECT:%d>%s" % (len(e["sec"]), e["sec"]),
-                "<EOR>"
-            ]
-            fp.write("\r\n".join(stanza))
-            fp.write("\r\n")
-            i += 1
-            time_on += 2
+            e = merge_entries_new(call, callmap[call])
+
+            stanza = ["<CALL:%d>%s" % (len(call), call),
+                      "<P:%d>%s" % (len(e["EXCH1"]), e["EXCH1"]),
+                      "<CK:%d>%s" % (len(e["CK"]), e["CK"]),
+                      "<ARRL_SECT:%d>%s" % (len(e["SECT"]), e["SECT"]),
+                      "<EOR>"]
+
+            fp.write("\n".join(stanza))
+            fp.write("\n")
 
 
 def enumerate_files(dir):
@@ -242,9 +245,10 @@ def enumerate_files(dir):
 
 def usage():
     sys.stderr.write(
-"""
-usage: %s [-p pre_existing_fills] -d dir
-""" % sys.argv[0])
+        """
+        usage: %s [-p pre_existing_fills] -d dir
+        """ % sys.argv[0])
+
 
 if __name__ == "__main__":
     pre_ex_file = None
@@ -275,8 +279,8 @@ if __name__ == "__main__":
     write_trlog("SS_2013_trlog_prefill.asc")
 
     # For debugging is something's fishy with the calculations
-    #import pprint
-    #pprint.pprint(callmap)
+    # import pprint
+    # pprint.pprint(callmap)
 
-
-    sys.stderr.write("Processed %d QSOs, %d unique callsigns, from %d logs, in %f seconds\n" % (tot_qsos, len(callmap), tot_logs, time.time() - start_time))
+    sys.stderr.write("Processed %d QSOs, %d unique callsigns, from %d logs, in %f seconds\n" % (
+        tot_qsos, len(callmap), tot_logs, time.time() - start_time))
